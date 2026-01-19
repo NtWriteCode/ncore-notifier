@@ -141,22 +141,23 @@ def check_for_new_torrents():
             # This is a new ID we haven't processed before
             new_seen_ids.add(t_id)
 
-            # 1. Filter by category
+            # If this is the initial run and silent mode is on, 
+            # we skip ALL detail fetching (category, date, etc.) to avoid HTTP requests.
+            if not seen_file_exists and SILENT_FIRST_RUN:
+                stats["silent_skipped"] += 1
+                continue
+
+            # 1. Filter by category (Accessing 'type' triggers a lazy-loading HTTP request)
             t_type_val = torrent['type'].value if hasattr(torrent['type'], 'value') else str(torrent['type'])
             if t_type_val.lower() not in types_to_check:
                 stats["wrong_category"] += 1
                 continue
                 
-            # 2. Filter by date (if enabled)
+            # 2. Filter by date (Accessing 'date' triggers a lazy-loading HTTP request)
             if ONLY_RECENT_YEARS and hasattr(torrent['date'], 'year'):
                 if torrent['date'].year not in allowed_years:
                     stats["too_old"] += 1
                     continue
-
-            # If this is the first run and silent mode is on, just record the IDs without notifying
-            if not seen_file_exists and SILENT_FIRST_RUN:
-                stats["silent_skipped"] += 1
-                continue
 
             logger.info(f"New torrent found: {torrent['title']}")
             
