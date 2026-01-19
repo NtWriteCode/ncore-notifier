@@ -25,16 +25,17 @@ class TestTracker(unittest.TestCase):
         main.SEEN_FILE = os.path.join(self.test_dir, "seen.json")
         main.COOKIE_FILE = os.path.join(self.test_dir, "cookies.json")
         
-        # Reset environment/config to defaults for testing
-        main.NCORE_TYPES_STR = "HD_HUN,HDSER"
-        main.TELEGRAM_TOKEN = "test_token"
-        main.TELEGRAM_CHAT_ID = "test_chat"
-        main.SILENT_FIRST_RUN = True
-        main.ONLY_RECENT_YEARS = True
-        main.NOTIFICATION_LINK_TYPE = "both"
+        # Reset config for testing
+        main.CONFIG.update({
+            "TYPES": {"hd_hun", "hdser"},
+            "TG_TOKEN": "test_token",
+            "TG_CHAT": "test_chat",
+            "SILENT_START": True,
+            "ONLY_RECENT": True,
+            "LINK_TYPE": "both"
+        })
 
     def tearDown(self):
-        # Cleanup
         if os.path.exists(self.test_dir):
             import shutil
             shutil.rmtree(self.test_dir)
@@ -52,116 +53,94 @@ class TestTracker(unittest.TestCase):
             'download': f'https://ncore.pro/download/{t_id}'
         }
 
-    @patch('main.get_ncore_client')
-    @patch('main.send_telegram_notification')
+    @patch('main.get_client')
+    @patch('main.send_tg')
     def test_silent_first_run(self, mock_notify, mock_client_factory):
         mock_client = MagicMock()
         mock_client_factory.return_value = mock_client
-        
-        main.SILENT_FIRST_RUN = True
-        # Initial run with 2 torrents
+        main.CONFIG["SILENT_START"] = True
+
         mock_client.get_recommended.return_value = [
             self.create_mock_torrent(1, "Movie 1", "HD_HUN"),
             self.create_mock_torrent(2, "Series 1", "HDSER")
         ]
         
-        main.check_for_new_torrents()
-        
-        # Should NOT notify on first run if silent
+        main.run_tracker()
         self.assertEqual(mock_notify.call_count, 0)
         
-        # Should have saved them to seen.json
         with open(main.SEEN_FILE, 'r') as f:
             seen = json.load(f)
             self.assertIn("1", seen)
             self.assertIn("2", seen)
 
-        # Second run with a brand new torrent
         mock_client.get_recommended.return_value.append(
             self.create_mock_torrent(3, "Movie 2", "HD_HUN")
         )
         
-        main.check_for_new_torrents()
-        # Should notify only for the 3rd one
+        main.run_tracker()
         self.assertEqual(mock_notify.call_count, 1)
 
-    @patch('main.get_ncore_client')
-    @patch('main.send_telegram_notification')
+    @patch('main.get_client')
+    @patch('main.send_tg')
     def test_year_filtering(self, mock_notify, mock_client_factory):
         mock_client = MagicMock()
         mock_client_factory.return_value = mock_client
-        
-        # Set database exists to avoid silent first run
-        os.makedirs(self.test_dir, exist_ok=True)
         with open(main.SEEN_FILE, 'w') as f:
             json.dump([], f)
         
-        current_year = datetime.datetime.now().year
-        
+        cur_year = datetime.datetime.now().year
         mock_client.get_recommended.return_value = [
-            self.create_mock_torrent(1, "New Movie", "HD_HUN", datetime.datetime(current_year, 1, 1)),
-            self.create_mock_torrent(2, "Old Movie", "HD_HUN", datetime.datetime(current_year - 5, 1, 1))
+            self.create_mock_torrent(1, "New", "HD_HUN", datetime.datetime(cur_year, 1, 1)),
+            self.create_mock_torrent(2, "Old", "HD_HUN", datetime.datetime(cur_year - 5, 1, 1))
         ]
         
-        main.ONLY_RECENT_YEARS = True
-        main.check_for_new_torrents()
-        
-        # Only notify for the new one
+        main.CONFIG["ONLY_RECENT"] = True
+        main.run_tracker()
         self.assertEqual(mock_notify.call_count, 1)
-        self.assertIn("New Movie", mock_notify.call_args[0][0])
+        self.assertIn("New", mock_notify.call_args[0][0])
 
-    @patch('main.get_ncore_client')
-    @patch('main.send_telegram_notification')
+    @patch('main.get_client')
+    @patch('main.send_tg')
     def test_category_filtering(self, mock_notify, mock_client_factory):
         mock_client = MagicMock()
         mock_client_factory.return_value = mock_client
-        
-        # Set database exists
         with open(main.SEEN_FILE, 'w') as f:
             json.dump([], f)
             
-        main.NCORE_TYPES_STR = "HD_HUN" # Only interested in HD Movies
-        
+        main.CONFIG["TYPES"] = {"hd_hun"}
         mock_client.get_recommended.return_value = [
             self.create_mock_torrent(1, "Matched", "HD_HUN"),
             self.create_mock_torrent(2, "Unmatched", "GAME_ISO")
         ]
         
-        main.check_for_new_torrents()
-        
-        # Only notify for the matched one
+        main.run_tracker()
         self.assertEqual(mock_notify.call_count, 1)
         self.assertIn("Matched", mock_notify.call_args[0][0])
 
-    @patch('main.get_ncore_client')
-    @patch('main.send_telegram_notification')
+    @patch('main.get_client')
+    @patch('main.send_tg')
     def test_link_configuration(self, mock_notify, mock_client_factory):
         mock_client = MagicMock()
         mock_client_factory.return_value = mock_client
         with open(main.SEEN_FILE, 'w') as f:
             json.dump([], f)
 
-        torrent = self.create_mock_torrent(1, "Test", "HD_HUN")
-        mock_client.get_recommended.return_value = [torrent]
+        mock_client.get_recommended.return_value = [self.create_mock_torrent(1, "Test", "HD_HUN")]
 
         # Test 'url' only
-        main.NOTIFICATION_LINK_TYPE = "url"
-        main.check_for_new_torrents()
-        msg = mock_notify.call_args[0][0]
-        self.assertIn("🔗 Details", msg)
-        self.assertNotIn("⬇️ Download", msg)
+        main.CONFIG["LINK_TYPE"] = "url"
+        main.run_tracker()
+        self.assertIn("🔗 Details", mock_notify.call_args[0][0])
+        self.assertNotIn("⬇️ Download", mock_notify.call_args[0][0])
 
-        # Clear seen for next subtest
+        # Test 'download' only
         with open(main.SEEN_FILE, 'w') as f:
             json.dump([], f)
         mock_notify.reset_mock()
-
-        # Test 'download' only
-        main.NOTIFICATION_LINK_TYPE = "download"
-        main.check_for_new_torrents()
-        msg = mock_notify.call_args[0][0]
-        self.assertNotIn("🔗 Details", msg)
-        self.assertIn("⬇️ Download", msg)
+        main.CONFIG["LINK_TYPE"] = "download"
+        main.run_tracker()
+        self.assertNotIn("🔗 Details", mock_notify.call_args[0][0])
+        self.assertIn("⬇️ Download", mock_notify.call_args[0][0])
 
 if __name__ == '__main__':
     unittest.main()

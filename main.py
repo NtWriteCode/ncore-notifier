@@ -5,217 +5,154 @@ import logging
 import schedule
 import requests
 import html
-import html
 import datetime
+import traceback
 from dotenv import load_dotenv
 from ncoreparser import Client, SearchParamType
 
-# Load environment variables from .env file (if it exists)
+# Load environment variables
 load_dotenv()
 
 # Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Configuration
-NCORE_USER = os.environ.get("NCORE_USER")
-NCORE_PASS = os.environ.get("NCORE_PASS")
-NCORE_TYPES_STR = os.environ.get("NCORE_TYPES", "HD_HUN")
-CRON_INTERVAL = int(os.environ.get("CRON_INTERVAL", "60"))
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+# Configuration Helper
+def get_env(key, default=None, type_cast=str):
+    val = os.environ.get(key, default)
+    if type_cast == bool:
+        return str(val).lower() in ("true", "1", "yes", "on")
+    return type_cast(val) if val is not None else default
 
-# New Features Configuration
-def str_to_bool(val):
-    return str(val).lower() in ("true", "1", "yes", "on")
+# Settings
+CONFIG = {
+    "USER": get_env("NCORE_USER"),
+    "PASS": get_env("NCORE_PASS"),
+    "TYPES": {t.strip().lower() for t in get_env("NCORE_TYPES", "HD_HUN").split(",")},
+    "INTERVAL": get_env("CRON_INTERVAL", 60, int),
+    "TG_TOKEN": get_env("TELEGRAM_TOKEN"),
+    "TG_CHAT": get_env("TELEGRAM_CHAT_ID"),
+    "SILENT_START": get_env("SILENT_FIRST_RUN", True, bool),
+    "ONLY_RECENT": get_env("ONLY_RECENT_YEARS", True, bool),
+    "LINK_TYPE": get_env("NOTIFICATION_LINK_TYPE", "both").lower()
+}
 
-SILENT_FIRST_RUN = str_to_bool(os.environ.get("SILENT_FIRST_RUN", "True"))
-ONLY_RECENT_YEARS = str_to_bool(os.environ.get("ONLY_RECENT_YEARS", "True"))
-# Options: 'download', 'url', 'both'
-NOTIFICATION_LINK_TYPE = os.environ.get("NOTIFICATION_LINK_TYPE", "both").lower()
-
-# Dynamic data directory: /app/data in Docker, ./data locally
 DATA_DIR = "/app/data" if os.path.exists("/.dockerenv") else "./data"
 SEEN_FILE = os.path.join(DATA_DIR, "seen.json")
 COOKIE_FILE = os.path.join(DATA_DIR, "cookies.json")
 
-def send_telegram_notification(message):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        logger.warning("Telegram notification skipped: Token or Chat ID not configured.")
-        return
-
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "HTML"
-    }
+def json_io(path, data=None):
     try:
-        response = requests.post(url, json=payload)
-        if response.status_code != 200:
-            logger.error(f"Telegram API Error: {response.text}")
-        response.raise_for_status()
+        if data is None: # Load mode
+            if not os.path.exists(path): return []
+            with open(path, 'r') as f: return json.load(f)
+        # Save mode
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w') as f: json.dump(data, f, indent=2)
     except Exception as e:
-        logger.error(f"Failed to send Telegram notification: {e}")
+        logger.error(f"IO Error on {path}: {e}")
+    return [] if data is None else None
 
-def load_json(filepath, default):
-    if os.path.exists(filepath):
-        try:
-            with open(filepath, 'r') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"Error loading {filepath}: {e}")
-    return default
-
-def save_json(filepath, data):
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    try:
-        with open(filepath, 'w') as f:
-            json.dump(data, f)
-    except Exception as e:
-        logger.error(f"Error saving {filepath}: {e}")
-
-def get_ncore_client():
-    cookies = load_json(COOKIE_FILE, None)
-    client = Client(cookies=cookies)
+def send_tg(message):
+    if not CONFIG["TG_TOKEN"] or not CONFIG["TG_CHAT"]:
+        return logger.warning("Telegram not configured.")
     
-    # Check if we are actually logged in (internal hack based on example)
-    # The example suggests client._logged_in is the way to check.
+    try:
+        res = requests.post(
+            f"https://api.telegram.org/bot{CONFIG['TG_TOKEN']}/sendMessage",
+            json={"chat_id": CONFIG["TG_CHAT"], "text": message, "parse_mode": "HTML"}
+        )
+        if res.status_code != 200:
+            logger.error(f"Telegram API Error: {res.text}")
+    except Exception as e:
+        logger.error(f"Telegram notification failed: {e}")
+
+def get_client():
+    client = Client(cookies=json_io(COOKIE_FILE))
     if not getattr(client, "_logged_in", False):
-        if not NCORE_USER or not NCORE_PASS:
-            logger.error("Not logged in and NCORE_USER/NCORE_PASS not provided!")
-            return None
+        if not CONFIG["USER"] or not CONFIG["PASS"]:
+            return logger.error("Missing nCore credentials!")
         
-        logger.info("Logging in to ncore...")
+        logger.info("Logging in to nCore...")
         try:
-            cookies = client.login(NCORE_USER, NCORE_PASS)
-            save_json(COOKIE_FILE, cookies)
-            logger.info("Login successful, cookies saved.")
+            cookies = client.login(CONFIG["USER"], CONFIG["PASS"])
+            json_io(COOKIE_FILE, cookies)
         except Exception as e:
-            logger.error(f"Login failed: {e}")
-            return None
-    else:
-        logger.info("Reusing existing session cookies.")
-    
+            return logger.error(f"Login failed: {e}")
     return client
 
-def check_for_new_torrents():
-    logger.info("Checking for new torrents...")
-    client = get_ncore_client()
-    if not client:
-        return
+def run_tracker():
+    logger.info("Starting check for new torrents...")
+    client = get_client()
+    if not client: return
 
-    seen_file_exists = os.path.exists(SEEN_FILE)
-    seen_ids = set(load_json(SEEN_FILE, []))
+    seen_exists = os.path.exists(SEEN_FILE)
+    seen_ids = set(json_io(SEEN_FILE))
     new_seen_ids = set(seen_ids)
     
-    types_to_check = {t.strip().lower() for t in NCORE_TYPES_STR.split(",")}
-    
-    stats = {
-        "total": 0,
-        "already_seen": 0,
-        "wrong_category": 0,
-        "too_old": 0,
-        "silent_skipped": 0,
-        "notifications_sent": 0
-    }
+    stats = {"total": 0, "seen": 0, "wrong_cat": 0, "old": 0, "silent": 0, "sent": 0}
+    allowed_years = [datetime.datetime.now().year, datetime.datetime.now().year - 1]
 
     try:
-        logger.info("Fetching recommended torrents...")
-        all_recommended = client.get_recommended()
-        
-        current_year = datetime.datetime.now().year
-        allowed_years = [current_year, current_year - 1]
-
-        for torrent in all_recommended:
+        for torrent in client.get_recommended():
             stats["total"] += 1
             t_id = str(torrent['id'])
             
             if t_id in seen_ids:
-                stats["already_seen"] += 1
+                stats["seen"] += 1
                 continue
             
-            # This is a new ID we haven't processed before
             new_seen_ids.add(t_id)
-
-            # If this is the initial run and silent mode is on, 
-            # we skip ALL detail fetching (category, date, etc.) to avoid HTTP requests.
-            if not seen_file_exists and SILENT_FIRST_RUN:
-                stats["silent_skipped"] += 1
+            
+            if not seen_exists and CONFIG["SILENT_START"]:
+                stats["silent"] += 1
                 continue
 
-            # 1. Filter by category (Accessing 'type' triggers a lazy-loading HTTP request)
-            t_type_val = torrent['type'].value if hasattr(torrent['type'], 'value') else str(torrent['type'])
-            if t_type_val.lower() not in types_to_check:
-                stats["wrong_category"] += 1
+            # Heavy lazy-loading starts here
+            t_type = torrent['type'].value if hasattr(torrent['type'], 'value') else str(torrent['type'])
+            if t_type.lower() not in CONFIG["TYPES"]:
+                stats["wrong_cat"] += 1
                 continue
                 
-            # 2. Filter by date (Accessing 'date' triggers a lazy-loading HTTP request)
-            if ONLY_RECENT_YEARS and hasattr(torrent['date'], 'year'):
-                if torrent['date'].year not in allowed_years:
-                    stats["too_old"] += 1
-                    continue
+            if CONFIG["ONLY_RECENT"] and getattr(torrent.get('date'), 'year', 0) not in allowed_years:
+                stats["old"] += 1
+                continue
 
             logger.info(f"New torrent found: {torrent['title']}")
             
-            # Format links
             links = []
-            if NOTIFICATION_LINK_TYPE in ('url', 'both'):
+            if CONFIG["LINK_TYPE"] in ('url', 'both'):
                 links.append(f"<a href='{torrent['url']}'>🔗 Details</a>")
-            if NOTIFICATION_LINK_TYPE in ('download', 'both'):
+            if CONFIG["LINK_TYPE"] in ('download', 'both'):
                 links.append(f"<a href='{torrent['download']}'>⬇️ Download</a>")
-            
-            links_str = " | ".join(links)
 
-            message = (
+            msg = (
                 f"🌟 <b>New Recommended Torrent!</b>\n\n"
                 f"📌 <b>Title:</b> {html.escape(str(torrent['title']))}\n"
                 f"📂 <b>Type:</b> {html.escape(str(torrent['type']))}\n"
                 f"⚖️ <b>Size:</b> {html.escape(str(torrent['size']))}\n"
                 f"📅 <b>Date:</b> {torrent['date'].strftime('%Y-%m-%d %H:%M') if hasattr(torrent['date'], 'strftime') else 'Unknown'}\n\n"
-                f"{links_str}"
+                f"{' | '.join(links)}"
             )
-            send_telegram_notification(message)
-            stats["notifications_sent"] += 1
+            send_tg(msg)
+            stats["sent"] += 1
                 
-    except Exception as e:
-        logger.error(f"Error during check: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
+    except Exception:
+        logger.error(f"Tracker error: {traceback.format_exc()}")
 
-    # Summary logging
-    summary = (
-        f"Check finished. Total in list: {stats['total']} | "
-        f"Already seen: {stats['already_seen']} | "
-        f"New: {stats['total'] - stats['already_seen']} ("
-        f"Notified: {stats['notifications_sent']}, "
-        f"Wrong Category: {stats['wrong_category']}, "
-        f"Too Old: {stats['too_old']}"
+    logger.info(
+        f"Check finished. Total: {stats['total']} | Already seen: {stats['seen']} | "
+        f"New: {stats['total'] - stats['seen']} (Notified: {stats['sent']}, "
+        f"Wrong Category: {stats['wrong_cat']}, Too Old: {stats['old']}"
+        f"{', Silent: ' + str(stats['silent']) if stats['silent'] else ''})"
     )
-    if stats['silent_skipped'] > 0:
-        summary += f", Silent First Run: {stats['silent_skipped']}"
-    summary += ")"
-    
-    logger.info(summary)
 
     if len(new_seen_ids) > len(seen_ids):
-        save_json(SEEN_FILE, list(new_seen_ids))
+        json_io(SEEN_FILE, list(new_seen_ids))
 
-def main():
-    logger.info("Starting ncore-tracker...")
-    
-    # Run once at startup
-    check_for_new_torrents()
-    
-    # Schedule periodic runs
-    schedule.every(CRON_INTERVAL).minutes.do(check_for_new_torrents)
-    
+if __name__ == "__main__":
+    run_tracker() # Initial run
+    schedule.every(CONFIG["INTERVAL"]).minutes.do(run_tracker)
     while True:
         schedule.run_pending()
         time.sleep(1)
-
-if __name__ == "__main__":
-    main()
