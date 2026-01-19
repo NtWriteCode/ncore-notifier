@@ -1,0 +1,14 @@
+services:
+  ncore-tracker:
+    build: .
+    container_name: ncore-tracker
+    restart: unless-stopped
+    environment:
+      - NCORE_USER=your_username
+      - NCORE_PASS=your_password
+      - NCORE_TYPES=HD_HUN,HDSER_HUN
+      - CRON_INTERVAL=60
+      - TELEGRAM_TOKEN=your_bot_token
+      - TELEGRAM_CHAT_ID=your_chat_id
+    volumes:
+      - ./data:/app/data

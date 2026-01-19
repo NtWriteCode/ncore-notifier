@@ -1,0 +1,4 @@
+ncoreparser
+schedule
+requests
+python-dotenv
