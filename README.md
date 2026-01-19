@@ -13,9 +13,36 @@ If you often check the "Recommended" (Ajánlott) section on nCore but don't want
 - A Telegram Bot (see below).
 - Docker and Docker Compose installed.
 
-### 2. Setup
-1. **Clone/Download** the repository.
-2. **Configure**: Open `docker-compose.yml` and fill in your credentials:
+### 2. Manual Setup (Clone Repo)
+1. **Clone/Download** this repository.
+2. **Configure**: Open `docker-compose.yml` and fill in your credentials.
+3. **Run**: `docker compose up -d`
+
+### 3. Quick Start (Portainer / Docker Compose)
+If you don't want to clone the repository, just copy this content into a `docker-compose.yml` file or a Portainer stack:
+
+```yaml
+services:
+  ncore-tracker:
+    image: ntwritecode/ncore-notifier:latest
+    container_name: ncore-tracker
+    restart: unless-stopped
+    environment:
+      - NCORE_USER=your_username
+      - NCORE_PASS=your_password
+      - NCORE_TYPES=HD_HUN,HDSER_HUN
+      - CRON_INTERVAL=60
+      - TELEGRAM_TOKEN=your_bot_token
+      - TELEGRAM_CHAT_ID=your_chat_id
+      - SILENT_FIRST_RUN=True
+      - ONLY_RECENT_YEARS=True
+      - NOTIFICATION_LINK_TYPE=both
+    volumes:
+      - ./data:/app/data
+```
+
+### 4. Configuration Details
+Fill in your credentials as follows:
    - `NCORE_USER`: Your nCore username.
    - `NCORE_PASS`: Your nCore password.
    - `NCORE_TYPES`: What you are interested in (e.g., `HD_HUN,HDSER_HUN`).
@@ -27,11 +54,6 @@ If you often check the "Recommended" (Ajánlott) section on nCore but don't want
 3. **Run**:
    Choose one of the methods below:
 
-   **Method A: Docker (Recommended)**
-   ```bash
-   docker compose up -d
-   ```
-
    **Method B: Local Execution (for testing)**
    If you want to run it without Docker using `uv`:
    1. Copy the example config: `cp .env.example .env`
@@ -42,7 +64,7 @@ If you often check the "Recommended" (Ajánlott) section on nCore but don't want
       uv run python main.py
       ```
 
-### 3. Available Categories (`NCORE_TYPES`)
+### 5. Available Categories (`NCORE_TYPES`)
 You can mix and match these categories (comma-separated):
 
 | Category | Description | Category | Description |
