@@ -113,13 +113,20 @@ def check_for_new_torrents():
     new_seen_ids = set(seen_ids)
     
     types_to_check = {t.strip().lower() for t in NCORE_TYPES_STR.split(",")}
-    new_found_count = 0
-    notifications_sent = 0
+    
+    stats = {
+        "total": 0,
+        "already_seen": 0,
+        "wrong_category": 0,
+        "too_old": 0,
+        "silent_skipped": 0,
+        "notifications_sent": 0
+    }
 
     try:
-        # Fetch all recommended torrents once to avoid multiple requests
-        logger.info("Fetching all recommended torrents...")
+        logger.info("Fetching recommended torrents...")
         all_recommended = client.get_recommended()
+        stats["total"] = len(all_recommended)
         
         current_year = datetime.datetime.now().year
         allowed_years = [current_year, current_year - 1]
@@ -127,60 +134,74 @@ def check_for_new_torrents():
         for torrent in all_recommended:
             t_id = str(torrent['id'])
             
+            if t_id in seen_ids:
+                stats["already_seen"] += 1
+                continue
+            
+            # This is a new ID we haven't processed before
+            new_seen_ids.add(t_id)
+
             # 1. Filter by category
             t_type_val = torrent['type'].value if hasattr(torrent['type'], 'value') else str(torrent['type'])
             if t_type_val.lower() not in types_to_check:
+                stats["wrong_category"] += 1
                 continue
                 
             # 2. Filter by date (if enabled)
             if ONLY_RECENT_YEARS and hasattr(torrent['date'], 'year'):
                 if torrent['date'].year not in allowed_years:
+                    stats["too_old"] += 1
                     continue
 
-            # 3. Check if new
-            if t_id not in seen_ids:
-                new_seen_ids.add(t_id)
-                new_found_count += 1
-                
-                # If this is the first run and silent mode is on, just record the IDs
-                if not seen_file_exists and SILENT_FIRST_RUN:
-                    continue
+            # If this is the first run and silent mode is on, just record the IDs without notifying
+            if not seen_file_exists and SILENT_FIRST_RUN:
+                stats["silent_skipped"] += 1
+                continue
 
-                logger.info(f"New torrent found: {torrent['title']}")
-                
-                # Format links
-                links = []
-                if NOTIFICATION_LINK_TYPE in ('url', 'both'):
-                    links.append(f"<a href='{torrent['url']}'>🔗 Details</a>")
-                if NOTIFICATION_LINK_TYPE in ('download', 'both'):
-                    links.append(f"<a href='{torrent['download']}'>⬇️ Download</a>")
-                
-                links_str = " | ".join(links)
+            logger.info(f"New torrent found: {torrent['title']}")
+            
+            # Format links
+            links = []
+            if NOTIFICATION_LINK_TYPE in ('url', 'both'):
+                links.append(f"<a href='{torrent['url']}'>🔗 Details</a>")
+            if NOTIFICATION_LINK_TYPE in ('download', 'both'):
+                links.append(f"<a href='{torrent['download']}'>⬇️ Download</a>")
+            
+            links_str = " | ".join(links)
 
-                message = (
-                    f"🌟 <b>New Recommended Torrent!</b>\n\n"
-                    f"📌 <b>Title:</b> {html.escape(str(torrent['title']))}\n"
-                    f"📂 <b>Type:</b> {html.escape(str(torrent['type']))}\n"
-                    f"⚖️ <b>Size:</b> {html.escape(str(torrent['size']))}\n"
-                    f"� <b>Date:</b> {torrent['date'].strftime('%Y-%m-%d %H:%M') if hasattr(torrent['date'], 'strftime') else 'Unknown'}\n\n"
-                    f"{links_str}"
-                )
-                send_telegram_notification(message)
-                notifications_sent += 1
+            message = (
+                f"🌟 <b>New Recommended Torrent!</b>\n\n"
+                f"📌 <b>Title:</b> {html.escape(str(torrent['title']))}\n"
+                f"📂 <b>Type:</b> {html.escape(str(torrent['type']))}\n"
+                f"⚖️ <b>Size:</b> {html.escape(str(torrent['size']))}\n"
+                f"📅 <b>Date:</b> {torrent['date'].strftime('%Y-%m-%d %H:%M') if hasattr(torrent['date'], 'strftime') else 'Unknown'}\n\n"
+                f"{links_str}"
+            )
+            send_telegram_notification(message)
+            stats["notifications_sent"] += 1
                 
     except Exception as e:
         logger.error(f"Error during check: {e}")
         import traceback
         logger.error(traceback.format_exc())
 
-    if new_found_count > 0:
+    # Summary logging
+    summary = (
+        f"Check finished. Total in list: {stats['total']} | "
+        f"Already seen: {stats['already_seen']} | "
+        f"New: {stats['total'] - stats['already_seen']} ("
+        f"Notified: {stats['notifications_sent']}, "
+        f"Wrong Category: {stats['wrong_category']}, "
+        f"Too Old: {stats['too_old']}"
+    )
+    if stats['silent_skipped'] > 0:
+        summary += f", Silent First Run: {stats['silent_skipped']}"
+    summary += ")"
+    
+    logger.info(summary)
+
+    if len(new_seen_ids) > len(seen_ids):
         save_json(SEEN_FILE, list(new_seen_ids))
-        if not seen_file_exists and SILENT_FIRST_RUN:
-            logger.info(f"Initial run completed silently. Marked {new_found_count} torrents as seen.")
-        else:
-            logger.info(f"Finished check. Found {new_found_count} new torrents, sent {notifications_sent} notifications.")
-    else:
-        logger.info("No new torrents found.")
 
 def main():
     logger.info("Starting ncore-tracker...")
