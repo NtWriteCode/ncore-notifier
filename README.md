@@ -64,18 +64,65 @@ Fill in your credentials as follows:
       uv run python main.py
       ```
 
-### 5. Available Categories (`NCORE_TYPES`)
-You can mix and match these categories (comma-separated):
+### 5. Wishlist Feature (Targeted Search)
+If you are looking for something specific (e.g. a specific movie that isn't currently "recommended"), you can create a `wishlist.json` file in your `./data` directory. The app will search for these patterns on every run.
 
-| Category | Description | Category | Description |
+**wishlist.json Example:**
+```json
+[
+  {
+    "pattern": "Forrest Gump",
+    "type": ["HD_HUN", "HD"],
+    "sort_by": "SEEDERS",
+    "sort_order": "DECREASING"
+  },
+  {
+    "pattern": "Inception",
+    "type": "HD_HUN"
+  }
+]
+```
+*When an item is found and notified, the app will automatically add `"notified": true` to that item in the JSON so it doesn't alert you again.*
+
+### 6. Category & Parameter Reference
+These values apply to both the global `NCORE_TYPES` configuration and the `wishlist.json` fields.
+
+#### Available Categories (`type`)
+| Type | Description | Type | Description |
 | :--- | :--- | :--- | :--- |
-| `HD_HUN` | HD Movies (Hungarian) | `HD` | HD Movies (English) |
-| `HDSER_HUN` | HD Series (Hungarian) | `HDSER` | HD Series (English) |
-| `SD_HUN` | SD Movies (Hungarian) | `SD` | SD Movies (English) |
-| `DVD_HUN` | DVD (Hungarian) | `GAME_ISO` | Game ISOs |
-| `EBOOK_HUN` | E-books (Hungarian) | `LOSSLESS_HUN` | Lossless Music (HU) |
+| `HD_HUN` | HD Movies (HU) | `HD` | HD Movies (EN) |
+| `HDSER_HUN` | HD Series (HU) | `HDSER` | HD Series (EN) |
+| `SD_HUN` | SD Movies (HU) | `SD` | SD Movies (EN) |
+| `SDSER_HUN` | SD Series (HU) | `SDSER` | SD Series (EN) |
+| `DVD_HUN` | DVD (HU) | `DVD` | DVD (EN) |
+| `DVD9_HUN` | DVD9 (HU) | `DVD9` | DVD9 (EN) |
+| `DVDSER_HUN` | DVD Series (HU) | `DVDSER` | DVD Series (EN) |
+| `GAME_ISO` | PC Games (ISO) | `GAME_RIP` | PC Games (RIP) |
+| `CONSOLE` | Console Games | `ISO` | Other ISO |
+| `EBOOK_HUN` | E-book (HU) | `EBOOK` | E-book (EN) |
+| `MP3_HUN` | MP3 (HU) | `MP3` | MP3 (EN) |
+| `LOSSLESS_HUN` | Lossless (HU) | `LOSSLESS` | Lossless (EN) |
+| `CLIP` | Music Video | `MOBIL` | Mobile |
+| `MISC` | Misc | `ISO` | Other ISO |
+| `XXX_HD` | Adult HD | `XXX_DVD` | Adult DVD |
+| `XXX_SD` | Adult SD | `XXX_IMG` | Adult Image |
+| `ALL_OWN` | All (Own) | | |
 
-*(For a full list, see the documentation or source code.)*
+#### Sorting Options (`sort_by`)
+| Value | Description |
+| :--- | :--- |
+| `NAME` | Sort by title |
+| `UPLOAD` | Sort by upload date |
+| `SIZE` | Sort by file size |
+| `TIMES_COMPLETED` | Sort by download count |
+| `SEEDERS` | Sort by active seeders |
+| `LEECHERS` | Sort by active leechers |
+
+#### Sort Order (`sort_order`)
+| Value | Description |
+| :--- | :--- |
+| `INCREASING` | Ascending order (A-Z, oldest first) |
+| `DECREASING` | Descending order (Z-A, newest first) |
 
 ## Technical Info
 - **Environment Variables**:

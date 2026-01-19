@@ -8,7 +8,7 @@ import html
 import datetime
 import traceback
 from dotenv import load_dotenv
-from ncoreparser import Client, SearchParamType
+from ncoreparser import Client, SearchParamType, ParamSort, ParamSeq
 
 # Load environment variables
 load_dotenv()
@@ -40,6 +40,7 @@ CONFIG = {
 DATA_DIR = "/app/data" if os.path.exists("/.dockerenv") else "./data"
 SEEN_FILE = os.path.join(DATA_DIR, "seen.json")
 COOKIE_FILE = os.path.join(DATA_DIR, "cookies.json")
+WISHLIST_FILE = os.path.join(DATA_DIR, "wishlist.json")
 
 def json_io(path, data=None):
     try:
@@ -150,9 +151,88 @@ def run_tracker():
     if len(new_seen_ids) > len(seen_ids):
         json_io(SEEN_FILE, list(new_seen_ids))
 
+def run_wishlist():
+    if not os.path.exists(WISHLIST_FILE):
+        return
+
+    logger.info("Checking wishlist...")
+    client = get_client()
+    if not client: return
+
+    wishlist = json_io(WISHLIST_FILE)
+    if not isinstance(wishlist, list):
+        return logger.warning("Wishlist is not a valid JSON array!")
+
+    changed = False
+    for item in wishlist:
+        if item.get("notified"):
+            continue
+
+        pattern = item.get("pattern")
+        if not pattern:
+            continue
+
+        types = item.get("type", "ALL_OWN")
+        if isinstance(types, str):
+            types = [types]
+
+        sort_by_str = item.get("sort_by", "SEEDERS").upper()
+        sort_order_str = item.get("sort_order", "DECREASING").upper()
+        
+        try:
+            sort_by = getattr(ParamSort, sort_by_str, ParamSort.SEEDERS)
+            sort_order = getattr(ParamSeq, sort_order_str, ParamSeq.DECREASING)
+        except Exception:
+            sort_by = ParamSort.SEEDERS
+            sort_order = ParamSeq.DECREASING
+
+        found_torrent = None
+        for t_type_str in types:
+            try:
+                t_type = getattr(SearchParamType, t_type_str.upper())
+                results = client.search(
+                    pattern=pattern,
+                    type=t_type,
+                    sort_by=sort_by,
+                    sort_order=sort_order
+                )
+                if results.torrents:
+                    found_torrent = results.torrents[0]
+                    break
+            except Exception as e:
+                logger.error(f"Wishlist search error for {pattern} in {t_type_str}: {e}")
+
+        if found_torrent:
+            logger.info(f"🌟 Wishlist item found: {pattern} -> {found_torrent['title']}")
+            
+            links = []
+            if CONFIG["LINK_TYPE"] in ('url', 'both'):
+                links.append(f"<a href='{found_torrent['url']}'>🔗 Details</a>")
+            if CONFIG["LINK_TYPE"] in ('download', 'both'):
+                links.append(f"<a href='{found_torrent['download']}'>⬇️ Download</a>")
+
+            msg = (
+                f"🎯 <b>Wishlist Item Found!</b>\n\n"
+                f"🔍 <b>Pattern:</b> {html.escape(pattern)}\n"
+                f"📌 <b>Title:</b> {html.escape(str(found_torrent['title']))}\n"
+                f"📂 <b>Type:</b> {html.escape(str(found_torrent['type']))}\n"
+                f"⚖️ <b>Size:</b> {html.escape(str(found_torrent['size']))}\n\n"
+                f"{' | '.join(links)}"
+            )
+            send_tg(msg)
+            item["notified"] = True
+            changed = True
+
+    if changed:
+        json_io(WISHLIST_FILE, wishlist)
+
+def job():
+    run_tracker()
+    run_wishlist()
+
 if __name__ == "__main__":
-    run_tracker() # Initial run
-    schedule.every(CONFIG["INTERVAL"]).minutes.do(run_tracker)
+    job() # Initial run
+    schedule.every(CONFIG["INTERVAL"]).minutes.do(job)
     while True:
         schedule.run_pending()
         time.sleep(1)

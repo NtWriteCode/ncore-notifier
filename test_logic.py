@@ -13,6 +13,7 @@ import main
 
 class MockSearchParamType(Enum):
     HD_HUN = "hd_hun"
+    HD = "hd"
     HDSER = "hdser"
     GAME_ISO = "game_iso"
 
@@ -141,6 +142,45 @@ class TestTracker(unittest.TestCase):
         main.run_tracker()
         self.assertNotIn("🔗 Details", mock_notify.call_args[0][0])
         self.assertIn("⬇️ Download", mock_notify.call_args[0][0])
+
+    @patch('main.get_client')
+    @patch('main.send_tg')
+    def test_wishlist_functionality(self, mock_notify, mock_client_factory):
+        main.WISHLIST_FILE = os.path.join(self.test_dir, "wishlist.json")
+        mock_client = MagicMock()
+        mock_client_factory.return_value = mock_client
+        
+        wishlist_data = [
+            {"pattern": "Forrest Gump", "type": ["HD_HUN", "HD"]},
+            {"pattern": "Dune", "type": "HD_HUN"}
+        ]
+        with open(main.WISHLIST_FILE, 'w') as f:
+            json.dump(wishlist_data, f)
+
+        # Mock search results for Forrest Gump (found in second type 'HD')
+        def mock_search(pattern, type, **kwargs):
+            mock_res = MagicMock()
+            if pattern == "Forrest Gump" and type.name == "HD":
+                mock_res.torrents = [self.create_mock_torrent(99, "Forrest Gump 1994", "HD")]
+            elif pattern == "Dune":
+                mock_res.torrents = [] # Not found
+            else:
+                mock_res.torrents = []
+            return mock_res
+
+        mock_client.search.side_effect = mock_search
+
+        main.run_wishlist()
+
+        # Should notify once for Forrest Gump
+        self.assertEqual(mock_notify.call_count, 1)
+        self.assertIn("Forrest Gump", mock_notify.call_args[0][0])
+
+        # Verify wishlist.json was updated with "notified": true
+        with open(main.WISHLIST_FILE, 'r') as f:
+            updated_wishlist = json.load(f)
+            self.assertTrue(updated_wishlist[0]["notified"])
+            self.assertFalse(updated_wishlist[1].get("notified", False))
 
 if __name__ == '__main__':
     unittest.main()
