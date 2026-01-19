@@ -126,12 +126,12 @@ def check_for_new_torrents():
     try:
         logger.info("Fetching recommended torrents...")
         all_recommended = client.get_recommended()
-        stats["total"] = len(all_recommended)
         
         current_year = datetime.datetime.now().year
         allowed_years = [current_year, current_year - 1]
 
         for torrent in all_recommended:
+            stats["total"] += 1
             t_id = str(torrent['id'])
             
             if t_id in seen_ids:
