@@ -17,6 +17,10 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Mute noisy external libraries
+for noisy_logger in ["ncoreparser", "urllib3", "requests"]:
+    logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+
 # Configuration Helper
 def get_env(key, default=None, type_cast=str):
     val = os.environ.get(key, default)
