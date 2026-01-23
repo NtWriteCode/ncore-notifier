@@ -132,6 +132,7 @@ These values apply to both the global `NCORE_TYPES` configuration and the `wishl
   - `SILENT_FIRST_RUN`: `True` to skip notifications for existing torrents on first start.
   - `ONLY_RECENT_YEARS`: `True` to only notify about torrents from this or the previous year.
   - `NOTIFICATION_LINK_TYPE`: `both`, `url` (details), or `download`.
+  - `RETENTION_MONTHS`: How many months to keep seen torrents in the database (default: 6).
 - **Persistence**: 
   - In Docker: Data is stored in the mounted volume (typically `./data`).
   - Locally: The app automatically detects it's not in a container and uses `./data` in your current folder.

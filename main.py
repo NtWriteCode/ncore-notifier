@@ -34,7 +34,8 @@ CONFIG = {
     "TG_CHAT": get_env("TELEGRAM_CHAT_ID"),
     "SILENT_START": get_env("SILENT_FIRST_RUN", True, bool),
     "ONLY_RECENT": get_env("ONLY_RECENT_YEARS", True, bool),
-    "LINK_TYPE": get_env("NOTIFICATION_LINK_TYPE", "both").lower()
+    "LINK_TYPE": get_env("NOTIFICATION_LINK_TYPE", "both").lower(),
+    "RETENTION": get_env("RETENTION_MONTHS", 6, int)
 }
 
 DATA_DIR = "/app/data" if os.path.exists("/.dockerenv") else "./data"
@@ -49,7 +50,7 @@ def json_io(path, data=None):
             with open(path, 'r') as f: return json.load(f)
         # Save mode
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, 'w') as f: json.dump(data, f, indent=2)
+        with open(path, 'w') as f: json.dump(data, f, separators=(',', ':'))
     except Exception as e:
         logger.error(f"IO Error on {path}: {e}")
     return [] if data is None else None
@@ -87,23 +88,32 @@ def run_tracker():
     client = get_client()
     if not client: return
 
+    # Load seen data
+    seen_data = json_io(SEEN_FILE)
+    if not isinstance(seen_data, dict):
+        seen_data = {}
+    
     seen_exists = os.path.exists(SEEN_FILE)
-    seen_ids = set(json_io(SEEN_FILE))
-    new_seen_ids = set(seen_ids)
+    updated_seen = False
     
     stats = {"total": 0, "seen": 0, "wrong_cat": 0, "old": 0, "silent": 0, "sent": 0}
     allowed_years = [datetime.datetime.now().year, datetime.datetime.now().year - 1]
 
     try:
+        current_ts = int(time.time())
         for torrent in client.get_recommended():
             stats["total"] += 1
             t_id = str(torrent['id'])
             
-            if t_id in seen_ids:
+            if t_id in seen_data:
                 stats["seen"] += 1
+                # Update timestamp so it stays "fresh" and won't be pruned
+                seen_data[t_id] = current_ts
                 continue
             
-            new_seen_ids.add(t_id)
+            # This is a new ID
+            seen_data[t_id] = current_ts
+            updated_seen = True
             
             if not seen_exists and CONFIG["SILENT_START"]:
                 stats["silent"] += 1
@@ -115,7 +125,7 @@ def run_tracker():
                 stats["wrong_cat"] += 1
                 continue
                 
-            if CONFIG["ONLY_RECENT"] and getattr(torrent.get('date'), 'year', 0) not in allowed_years:
+            if CONFIG["ONLY_RECENT"] and getattr(torrent['date'], 'year', 0) not in allowed_years:
                 stats["old"] += 1
                 continue
 
@@ -148,8 +158,12 @@ def run_tracker():
         f"{', Silent: ' + str(stats['silent']) if stats['silent'] else ''})"
     )
 
-    if len(new_seen_ids) > len(seen_ids):
-        json_io(SEEN_FILE, list(new_seen_ids))
+    if updated_seen:
+        # Prune entries older than CONFIG["RETENTION"] months
+        # Approximating a month as 30 days
+        cutoff = current_ts - (CONFIG["RETENTION"] * 30 * 24 * 60 * 60)
+        pruned = {k: v for k, v in seen_data.items() if v > cutoff}
+        json_io(SEEN_FILE, pruned)
 
 def run_wishlist():
     if not os.path.exists(WISHLIST_FILE):
