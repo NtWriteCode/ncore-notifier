@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Mute noisy external libraries
-for noisy_logger in ["ncoreparser", "urllib3", "requests"]:
+for noisy_logger in ["ncoreparser", "urllib3", "requests", "httpx", "httpcore"]:
     logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
 # Configuration Helper
@@ -181,9 +181,11 @@ def run_wishlist():
     if not isinstance(wishlist, list):
         return logger.warning("Wishlist is not a valid JSON array!")
 
+    stats = {"total": len(wishlist), "newly_notified": 0, "already_notified": 0}
     changed = False
     for item in wishlist:
         if item.get("notified"):
+            stats["already_notified"] += 1
             continue
 
         pattern = item.get("pattern")
@@ -240,6 +242,14 @@ def run_wishlist():
             send_tg(msg)
             item["notified"] = True
             changed = True
+            stats["newly_notified"] += 1
+
+    logger.info(
+        f"Wishlist check finished. Items: {stats['total']} | "
+        f"Found: {stats['newly_notified']} | "
+        f"Already Notified: {stats['already_notified']} | "
+        f"Pending: {stats['total'] - stats['already_notified'] - stats['newly_notified']}"
+    )
 
     if changed:
         json_io(WISHLIST_FILE, wishlist)
@@ -247,6 +257,10 @@ def run_wishlist():
 def job():
     run_tracker()
     run_wishlist()
+    
+    # Calculate and log next run time
+    next_run = datetime.datetime.now() + datetime.timedelta(minutes=CONFIG["INTERVAL"])
+    logger.info(f"Next lookup scheduled for: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
 
 if __name__ == "__main__":
     job() # Initial run
