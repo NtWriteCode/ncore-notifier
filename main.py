@@ -14,7 +14,9 @@ from ncoreparser import Client, SearchParamType, ParamSort, ParamSeq
 load_dotenv()
 
 # Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+is_debug = log_level == "DEBUG"
+logging.basicConfig(level=getattr(logging, log_level, logging.INFO), format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Mute noisy external libraries
@@ -47,14 +49,24 @@ SEEN_FILE = os.path.join(DATA_DIR, "seen.json")
 COOKIE_FILE = os.path.join(DATA_DIR, "cookies.json")
 WISHLIST_FILE = os.path.join(DATA_DIR, "wishlist.json")
 
-def json_io(path, data=None):
+def get_seen_ts(entry):
+    """Get timestamp from seen entry (supports both old int format and new dict format)"""
+    if isinstance(entry, dict):
+        return entry.get("ts", 0)
+    return entry if isinstance(entry, int) else 0
+
+def json_io(path, data=None, pretty=False):
     try:
         if data is None: # Load mode
             if not os.path.exists(path): return []
             with open(path, 'r') as f: return json.load(f)
         # Save mode
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, 'w') as f: json.dump(data, f, separators=(',', ':'))
+        with open(path, 'w') as f:
+            if pretty:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            else:
+                json.dump(data, f, separators=(',', ':'))
     except Exception as e:
         logger.error(f"IO Error on {path}: {e}")
     return [] if data is None else None
@@ -108,15 +120,24 @@ def run_tracker():
         for torrent in client.get_recommended():
             stats["total"] += 1
             t_id = str(torrent['id'])
+            t_type_raw = torrent['type'].value if hasattr(torrent['type'], 'value') else str(torrent['type'])
+            t_type = t_type_raw.lower()
+            t_title = str(torrent['title'])
             
             if t_id in seen_data:
                 stats["seen"] += 1
                 # Update timestamp so it stays "fresh" and won't be pruned
-                seen_data[t_id] = current_ts
+                if is_debug:
+                    seen_data[t_id] = {"ts": current_ts, "title": t_title, "type": t_type}
+                else:
+                    seen_data[t_id] = current_ts
                 continue
             
             # This is a new ID
-            seen_data[t_id] = current_ts
+            if is_debug:
+                seen_data[t_id] = {"ts": current_ts, "title": t_title, "type": t_type}
+            else:
+                seen_data[t_id] = current_ts
             updated_seen = True
             
             if not seen_exists and CONFIG["SILENT_START"]:
@@ -124,12 +145,21 @@ def run_tracker():
                 continue
 
             # Heavy lazy-loading starts here
-            t_type = torrent['type'].value if hasattr(torrent['type'], 'value') else str(torrent['type'])
-            if t_type.lower() not in CONFIG["TYPES"]:
+            
+            # Debug: Log every new torrent with its category
+            logger.debug(
+                f"New torrent: '{torrent['title']}' | "
+                f"Type: '{t_type_raw}' (normalized: '{t_type}') | "
+                f"Allowed types: {CONFIG['TYPES']}"
+            )
+            
+            if t_type not in CONFIG["TYPES"]:
+                logger.debug(f"  -> REJECTED: Type '{t_type}' not in allowed types")
                 stats["wrong_cat"] += 1
                 continue
                 
             if CONFIG["ONLY_RECENT"] and getattr(torrent['date'], 'year', 0) not in allowed_years:
+                logger.debug(f"  -> REJECTED: Year {getattr(torrent['date'], 'year', 'unknown')} not in {allowed_years}")
                 stats["old"] += 1
                 continue
 
@@ -166,8 +196,8 @@ def run_tracker():
         # Prune entries older than CONFIG["RETENTION"] months
         # Approximating a month as 30 days
         cutoff = current_ts - (CONFIG["RETENTION"] * 30 * 24 * 60 * 60)
-        pruned = {k: v for k, v in seen_data.items() if v > cutoff}
-        json_io(SEEN_FILE, pruned)
+        pruned = {k: v for k, v in seen_data.items() if get_seen_ts(v) > cutoff}
+        json_io(SEEN_FILE, pruned, pretty=is_debug)
 
 def run_wishlist():
     if not os.path.exists(WISHLIST_FILE):
@@ -263,6 +293,8 @@ def job():
     logger.info(f"Next lookup scheduled for: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
 
 if __name__ == "__main__":
+    logger.info(f"nCore Notifier started. Configured types: {CONFIG['TYPES']}")
+    logger.info(f"Log level: {log_level}")
     job() # Initial run
     schedule.every(CONFIG["INTERVAL"]).minutes.do(job)
     while True:
