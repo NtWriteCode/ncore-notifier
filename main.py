@@ -120,20 +120,23 @@ def run_tracker():
         for torrent in client.get_recommended():
             stats["total"] += 1
             t_id = str(torrent['id'])
-            t_type_raw = torrent['type'].value if hasattr(torrent['type'], 'value') else str(torrent['type'])
-            t_type = t_type_raw.lower()
-            t_title = str(torrent['title'])
             
             if t_id in seen_data:
                 stats["seen"] += 1
                 # Update timestamp so it stays "fresh" and won't be pruned
-                if is_debug:
-                    seen_data[t_id] = {"ts": current_ts, "title": t_title, "type": t_type}
+                # Don't access torrent['type'] here - it triggers lazy loading!
+                existing = seen_data[t_id]
+                if is_debug and isinstance(existing, dict):
+                    existing["ts"] = current_ts
                 else:
                     seen_data[t_id] = current_ts
                 continue
             
-            # This is a new ID
+            # This is a new ID - now safe to do lazy loading
+            t_type_raw = torrent['type'].value if hasattr(torrent['type'], 'value') else str(torrent['type'])
+            t_type = t_type_raw.lower()
+            t_title = str(torrent['title'])
+            
             if is_debug:
                 seen_data[t_id] = {"ts": current_ts, "title": t_title, "type": t_type}
             else:
@@ -144,11 +147,9 @@ def run_tracker():
                 stats["silent"] += 1
                 continue
 
-            # Heavy lazy-loading starts here
-            
             # Debug: Log every new torrent with its category
             logger.debug(
-                f"New torrent: '{torrent['title']}' | "
+                f"New torrent: '{t_title}' | "
                 f"Type: '{t_type_raw}' (normalized: '{t_type}') | "
                 f"Allowed types: {CONFIG['TYPES']}"
             )
